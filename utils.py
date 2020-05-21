@@ -1,8 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch import optim
+from torch.utils.data import DataLoader
+
 import numpy as np
+from sklearn.model_selection import train_test_split
+import cv2
+import glob
+
+from dataSets import TrainingDataSet
 
 class ContrastiveLoss(nn.Module):
     def __init__(self, margin=1.0):
@@ -15,6 +21,49 @@ class ContrastiveLoss(nn.Module):
 
         return loss_contrastive
 
+
+def readingImages(bananas_path, macas_path):
+    #Carregando os paths das imagens
+    all_path_bananas = glob.glob(bananas_path)
+    all_path_macas = glob.glob(macas_path)
+
+    #Definindo as labelsn banana = 0 e maca = 1
+    labels_banana = [0 for bananas in all_path_bananas]
+    labels_maca = [1 for macas in all_path_macas]
+
+    imagens_bananas = []
+    imagens_macas = []
+
+    #Loop para ler as imagens e adicionar nas listas 
+    for banana, maca in zip(all_path_bananas, all_path_macas):
+        imgB = cv2.imread(banana, 1)
+        imgB = cv2.resize(imgB, (250, 250))
+        imagens_bananas.append(imgB)
+
+        imgM = cv2.imread(maca, 1)
+        imgM = cv2.resize(imgM, (250, 250))
+        imagens_macas.append(imgM)
+    
+    return imagens_bananas, imagens_macas, labels_banana, labels_maca
+
+
+def creatingDataSets(imagens_banana, imagens_maca, labels_banana, labels_maca):
+    images = np.concatenate((imagens_banana, imagens_maca))
+    labels = np.concatenate((labels_banana, labels_maca))
+
+    #Separando em treino e validacao
+    train_x, val_x, train_y, val_y = train_test_split(images, labels, test_size = 0.33)
+
+    train_data_set = TrainingDataSet(train_x, train_y)
+    train_data_loader = DataLoader(train_data_set, shuffle=True, num_workers=2, batch_size=4)
+    
+    #Validation
+    validation_data_set = TrainingDataSet(val_x, val_y)
+    validation__data_loader = DataLoader(validation_data_set, shuffle=True, num_workers=2, batch_size=4)
+
+    return train_data_loader, validation__data_loader
+
+
 #Fuction to resize the network
 def modelResize(model, input_num, output_num):
     model.fc = nn.Sequential(
@@ -26,6 +75,7 @@ def modelResize(model, input_num, output_num):
             nn.Sigmoid()
         )
     return model
+
 
 #Function for one shotting learning
 def oneshot(output1, output2, label):
@@ -54,83 +104,3 @@ def oneshot(output1, output2, label):
     return [corrects, total]
         
 
-#Function to train the network
-def train(model, lr, data_loader, device, epoches = 100):
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
-    loss_function = ContrastiveLoss()
-
-    #Iterator over the epoches
-    for i in range(epoches):
-
-        print(f'Epoche {i + 1}/{epoches} Starting:')
-        
-        corrects = 0
-        total = 0
-
-        for i, data in enumerate(data_loader):
-
-            image1, image2, label = data
-            image1 = image1.to(device)
-            image2 = image2.to(device)
-            label = label.to(device)
-
-            #clear the calculated grad in previous batch
-            optimizer.zero_grad()
-            
-            #Applying the view function to images
-            image1 = image1.view(-1, 3, 250, 250).float()
-            image2 = image2.view(-1, 3, 250, 250).float() 
-            label  = label.float()
-
-            #Get responses from the network
-            output1 = model(image1)
-            output2 = model(image2)
-            
-            #loss calculation
-            loss = loss_function(output1, output2, label)
-            loss.backward()
-
-            #Optimizing
-            optimizer.step()
-
-            out = oneshot(output1, output2, label)
-            corrects += out[0]
-            total += out[1] 
-
-        print(f'Loss in this epoch: {loss}')
-
-        result = corrects * 100 / total
-        print(f'Accuracy in this epoche: {result}%\n')
-
-    print(f'Finished training!!!\n')
-
-def validation(model, validation_data_loader, device):
-
-    with torch.no_grad():
-        
-        corrects = 0
-        total = 0
-
-        for data in validation_data_loader:
-
-            image1, image2, label = data
-            image1 = image1.to(device)
-            image2 = image2.to(device)
-            label = label.to(device)
-
-            #Applying the view function to images
-            image1 = image1.view(-1, 3, 250, 250).float()
-            image2 = image2.view(-1, 3, 250, 250).float() 
-            label  = label.float()
-            
-            output1 = model(image1)
-            output2 = model(image2)
-            
-            out = oneshot(output1, output2, label)
-            corrects += out[0]
-            total += out[1]
-
-        result = corrects * 100 / total
-        print(f'Accuracy to validation data: {result}%\n')
-    print('Finished Validation\n')
